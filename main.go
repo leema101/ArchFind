@@ -166,7 +166,7 @@ func main() {
 		rebuild.mu.RUnlock()
 
 		line1 := fmt.Sprintf("[yellow]Items:[white] %d   [yellow]Built:[white] %s", total, builtText)
-		line2 := "[yellow]Keys:[white] Type=search   ↑/↓=move   Enter=open   Esc=clear/quit"
+		line2 := "[yellow]Keys:[white] Type=search   ↑/↓=move   Enter=open   Esc=clear"
 
 		if rebuildRunning || rebuildMsg != "" {
 			line3 := fmt.Sprintf("[yellow]Rebuild:[white] %s", rebuildMsg)
@@ -333,7 +333,7 @@ func main() {
 				refreshResults("", engine.Search(""))
 				return nil
 			}
-			app.Stop()
+			//app.Stop()
 			return nil
 		}
 
