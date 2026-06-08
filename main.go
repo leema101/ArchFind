@@ -238,8 +238,9 @@ func main() {
 
 	var lastRune rune
 	var lastRuneModifiers tcell.ModMask
-	var lastRuneFieldLen int // field length when we last passed this rune through
-	var lastRunePending bool // true = passed through, waiting for field to grow
+	var lastRuneFieldLen int   // field length when we last passed this rune through
+	var lastRunePending bool   // true = passed through, waiting for field to grow
+	var lastRuneTime time.Time // when we last passed this rune through
 
 	scheduleSearch := func(query string) {
 		debounceMu.Lock()
@@ -290,18 +291,20 @@ func main() {
 		}
 
 		if event.Key() == tcell.KeyRune {
+			now := time.Now()
 			curLen := len([]rune(search.GetText()))
-			// Suppress OS-level duplicate key events. Rather than relying on
-			// timing (which breaks on slow VDIs), we check whether the field
-			// actually grew since we last passed this rune through. tview
-			// processes events sequentially, so by the time the next event
-			// fires the field reflects the previous one. If the field length
-			// hasn't changed, the field hasn't consumed our rune yet — this
-			// event is a duplicate.
 			if event.Rune() == lastRune && event.Modifiers() == lastRuneModifiers && lastRunePending {
-				if curLen == lastRuneFieldLen {
+				// Two conditions catch different delivery patterns:
+				//   1. Field length unchanged: both events arrived before tview
+				//      processed the first one (same-batch duplicate).
+				//   2. Within 75ms: events arrived sequentially (field grew
+				//      between them) but too fast to be deliberate re-typing.
+				//      75ms < minimum same-key repeat interval for human typists
+				//      (~80ms) but covers VDI input-processing lag.
+				isDup := curLen == lastRuneFieldLen || now.Sub(lastRuneTime) < 75*time.Millisecond
+				if isDup {
 					if debugLog != nil {
-						fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate\trune=%q\tfield_len=%d\n", time.Now().Format(time.RFC3339Nano), event.Rune(), curLen)
+						fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate\trune=%q\tfield_len=%d\tdelta=%v\n", time.Now().Format(time.RFC3339Nano), event.Rune(), curLen, now.Sub(lastRuneTime))
 						_ = debugLog.Sync()
 					}
 					return nil
@@ -310,6 +313,7 @@ func main() {
 			lastRune = event.Rune()
 			lastRuneModifiers = event.Modifiers()
 			lastRuneFieldLen = curLen
+			lastRuneTime = now
 			lastRunePending = true
 		} else {
 			lastRunePending = false
