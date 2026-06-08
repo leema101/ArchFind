@@ -238,7 +238,8 @@ func main() {
 
 	var lastRune rune
 	var lastRuneModifiers tcell.ModMask
-	var lastRuneTime time.Time
+	var lastRuneFieldLen int // field length when we last passed this rune through
+	var lastRunePending bool // true = passed through, waiting for field to grow
 
 	scheduleSearch := func(query string) {
 		debounceMu.Lock()
@@ -289,30 +290,29 @@ func main() {
 		}
 
 		if event.Key() == tcell.KeyRune {
-			now := time.Now()
-			// Suppress OS-level duplicate key events (a known tcell/Windows
-			// console issue where the same keypress is delivered twice).
-			// True duplicates arrive within a few milliseconds; deliberate
-			// repeated characters (e.g. "ss") are typed 50ms+ apart, so
-			// 25ms is safe.
-			if event.Rune() == lastRune && event.Modifiers() == lastRuneModifiers && !lastRuneTime.IsZero() {
-				if now.Sub(lastRuneTime) < 25*time.Millisecond {
-					cur := search.GetText()
-					runes := []rune(cur)
-					if len(runes) > 0 && runes[len(runes)-1] == event.Rune() {
-						if debugLog != nil {
-							fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate\trune=%q\tdelta=%v\n", time.Now().Format(time.RFC3339Nano), event.Rune(), now.Sub(lastRuneTime))
-							_ = debugLog.Sync()
-						}
-						return nil
+			curLen := len([]rune(search.GetText()))
+			// Suppress OS-level duplicate key events. Rather than relying on
+			// timing (which breaks on slow VDIs), we check whether the field
+			// actually grew since we last passed this rune through. tview
+			// processes events sequentially, so by the time the next event
+			// fires the field reflects the previous one. If the field length
+			// hasn't changed, the field hasn't consumed our rune yet — this
+			// event is a duplicate.
+			if event.Rune() == lastRune && event.Modifiers() == lastRuneModifiers && lastRunePending {
+				if curLen == lastRuneFieldLen {
+					if debugLog != nil {
+						fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate\trune=%q\tfield_len=%d\n", time.Now().Format(time.RFC3339Nano), event.Rune(), curLen)
+						_ = debugLog.Sync()
 					}
+					return nil
 				}
 			}
 			lastRune = event.Rune()
 			lastRuneModifiers = event.Modifiers()
-			lastRuneTime = now
+			lastRuneFieldLen = curLen
+			lastRunePending = true
 		} else {
-			lastRuneTime = time.Time{}
+			lastRunePending = false
 		}
 
 		switch event.Key() {
