@@ -1,242 +1,113 @@
 # ArchFind
-Fast search for windoze for a defined directory including subdirectory. Works for cloud drives.
 
-# Config
-Update config.json with the directory to scan. On running the application an index will be rebuilt from the directory specified. 
+A fast, keyboard-driven file and folder search TUI for Windows, built with Go and [tview](https://github.com/rivo/tview).
 
-# Searches
-Search works by using keywords based on the title of the document. the order shown is by most recently modified first. 
+ArchFind pre-indexes one or more directory trees and lets you search them instantly from a terminal — no shell, no file explorer, just type and open.
 
-# Prerequisites
-Install Go
+---
 
-# Build with
-go build -o ArchFindTUI.exe
+## Features
 
-ArchFind (Terminal Edition)
-Fast, local file and folder search for large directory trees — built as a terminal UI (TUI) for reliability in VM / Citrix environments.
+- **Instant search** — results appear as you type via a debounced live search against a pre-built index
+- **Multiple root directories** — scan and search across several folder trees simultaneously; configure them as a JSON array
+- **Overlap detection** — if two configured paths are nested (e.g. `D:\Docs` and `D:\Docs\Archive`), the child is skipped automatically so files are never indexed twice
+- **Auto re-index on config change** — if `config.json` is newer than the index at startup, the index is rebuilt immediately before the UI opens
+- **Daily background rebuild** — if the index is from a previous calendar day, a silent background rebuild runs while you search; the UI updates automatically when it completes
+- **Fuzzy search** — optional Levenshtein-distance matching catches near-miss spellings (configurable distance)
+- **File and folder results** — results are labelled `[FILE]` or `[DIR ]` and sorted by most recently modified first
+- **One-key open** — press Enter to open the selected file with its default application, or open a folder in Explorer
+- **Keyboard navigation** — `↑`/`↓` move through results without leaving the search field; `Esc` clears the query
+- **Temp file exclusion** — files starting with `~$` or ending in `.tmp`/`.temp` are skipped during indexing
+- **Duplicate-input suppression** — handles spurious duplicate key events from slow VDI/RDP environments; the window is tunable via `dedup_window_ms`
+- **Debug input log** — set `ARCHFIND_DEBUG_INPUT=1` to write a timestamped key-event log next to the executable for diagnosing input issues
+- **Works with cloud drives** — any path accessible as a local folder (OneDrive, Google Drive, etc.) can be indexed
 
-Overview
-ArchFind is a lightweight search tool designed to:
+---
 
-index a large directory structure (e.g. OneDrive, shared folders)
-provide instant, keyboard-driven search
-run entirely in a terminal window
-avoid GUI/OpenGL dependencies (works in constrained environments like Citrix VMs)
+## Requirements
 
-The application builds a local index and lets you find files and folders instantly using a responsive, live-updating interface.
+- Windows 10 or Windows 11
+- A terminal that supports [tcell](https://github.com/gdamore/tcell) (Windows Console, Windows Terminal, ConPTY)
 
-Features
+---
 
-🔍 Live search while typing (debounced, smooth)
-📂 Searches both files and directories
-🧠 Multi-word AND matching (e.g. sip glass)
-🔤 Case-insensitive search
-📅 Smart sorting:
+## Installation
 
-exact filename match first
-then most recently modified
+1. Download `ArchFindTUI.exe` and place it in any folder.
+2. Run it once — `config.json` will be created automatically in the same folder.
+3. Edit `config.json` to set your root paths (see below).
+4. Run again — the index will be built and the UI will open.
 
+---
 
-📁 Displays parent folder path
-⌨️ Keyboard-driven navigation:
+## Configuration (`config.json`)
 
-↑ ↓ to move
-Enter to open
-Esc to clear / exit
-
-
-⚙️ Config-driven (JSON file next to EXE)
-🔄 Automatic background re-indexing (daily refresh)
-🚫 No OpenGL / no desktop UI dependencies
-
-
-# Prerequisites
-1) Go installed
-You need the Go toolchain installed and available on your system PATH.
-
-Recommended: latest stable version of Go
-Verify with:
-
-Shellgo versionShow more lines
-Go uses modules (go.mod) as its dependency system. [go.dev]
-
-2) Go modules support
-This project uses Go modules for dependency management (standard in modern Go).
-The Go tool will automatically download dependencies on first build. [index.golang.org]
-
-3) Terminal environment
-The app runs fully in a terminal using:
-
-tview (terminal UI widgets) [pkg.go.dev]
-tcell (terminal input/output handling) [pkg.go.dev]
-
-Any of the following work:
-
-Command Prompt
-PowerShell
-Windows Terminal
-Citrix-provided shell
-
-
-4) No external native dependencies
-This project is pure Go:
-
-✅ No GCC / MinGW required
-✅ No CGO
-✅ No OpenGL
-✅ No GUI frameworks
-
-
-
-
-
-## Configuration
-
-# Config file
-
+```json
 {
   "root_paths": [
-    "G:\\My Drive\\",
-    "D:\\Projects\\",
-    "C:\\Work\\docs"
+    "D:\\Documents",
+    "E:\\Projects"
   ],
   "index_path": "archfind-index.json",
   "max_results": 20,
   "exclude_temp_files": true,
   "fuzzy_enabled": false,
   "fuzzy_max_distance": 1,
-  "search_debounce_ms": 300
+  "search_debounce_ms": 300,
+  "dedup_window_ms": 150
 }
+```
 
-# Config Fields
+| Key | Type | Description |
+|---|---|---|
+| `root_paths` | array of strings | Directories to index. Sub-paths of each other are deduplicated automatically. |
+| `root_path` | string | Legacy single-directory alternative to `root_paths`. Ignored if `root_paths` is present. |
+| `index_path` | string | Path to the index file. Relative paths are resolved next to the executable. |
+| `max_results` | int | Maximum number of results shown (default `20`). |
+| `exclude_temp_files` | bool | Skip `~$*`, `*.tmp`, and `*.temp` files during indexing (default `true`). |
+| `fuzzy_enabled` | bool | Enable fuzzy (approximate) matching (default `false`). |
+| `fuzzy_max_distance` | int | Maximum Levenshtein edit distance for fuzzy matches (default `1`). |
+| `search_debounce_ms` | int | Milliseconds to wait after the last keystroke before running the search (default `300`). |
+| `dedup_window_ms` | int | Milliseconds within which an identical key event is suppressed as a duplicate. Increase (e.g. `200`) on slow VDI/RDP connections (default `150`). |
 
-Field               Description
-root_path           Root directory to index
-index_path          Where the index file is stored
-max_results         Number of results shown
-exclude_temp_files  Skip temp files (~$, .tmp, etc.)
-fuzzy_enabled       Enable fuzzy matching
-fuzzy_max_distance  Fuzzy match tolerance
-search_debounce_ms  Delay before search triggers
+> **Note:** In JSON, Windows paths must use double backslashes: `"D:\\My Folder"`.
 
-# Usage
-Run the executable:
-ArchFindTUI.exe
+---
 
+## Keyboard Shortcuts
 
+| Key | Action |
+|---|---|
+| Type | Filter results live |
+| `↑` / `↓` | Move selection up / down |
+| `Enter` | Open selected file or folder |
+| `Esc` | Clear the search field |
 
-# Controls
+---
 
-Key         Action
-Type        Update search
-↑ / ↓       Move selection
-Enter       Open file/folder
-Backspace   Delete
-Esc         Clear search / exit
+## How indexing works
 
+On first launch (or when no valid index is found), ArchFind builds the index synchronously before opening the UI. Subsequent launches load the cached index instantly and trigger a background rebuild only if:
 
+- The index is from a previous calendar day, **or**
+- `config.json` has been modified since the index was last built.
 
+The index is stored as a JSON file (`archfind-index.json` by default) next to the executable.
 
+---
 
+## Building from source
 
+```sh
+git clone <repo-url>
+cd archfind
+go build -o ArchFindTUI.exe .
+```
 
+Requires Go 1.21 or later.
 
+---
 
+## License
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-KeyActionTypeUpdate search↑ / ↓Move selectionEnterOpen file/folderBackspaceDeleteEscClear search / exit
-Opening behavior
-
-Files → open in default Windows app
-Folders → open in Explorer
-
-
-First Run
-
-If no index exists → the tool builds it first
-If an index exists → it loads instantly
-If index is older than today → background rebuild starts
-
-
-Architecture
-The application consists of:
-
-Indexer
-
-walks filesystem
-builds JSON index
-
-
-Search engine
-
-precomputes normalized names
-fast in-memory filtering
-
-
-TUI layer
-
-keyboard input loop
-result rendering
-
-
-Background worker
-
-daily index refresh
-
-
-
-
-Why Terminal UI?
-Designed specifically to work in constrained environments:
-
-✅ Citrix / VDI
-✅ Remote desktop sessions
-✅ Systems without OpenGL support
-✅ Locked-down enterprise environments
-
-tview provides a rich interface without needing a graphical desktop. [pkg.go.dev]
-
-Known Limitations
-
-Windows-oriented (Explorer / file opening)
-Not a system-wide search index (per configured root only)
-Large initial index creation may take time
-
-
-Future Enhancements
-
-Match highlighting in results
-Improved ranking/scoring
-Recent file weighting
-Keyboard shortcut launcher integration
-Cross-platform open support
-
-
-License
-MIT 
-
-Author
-Built as a lightweight, enterprise-friendly search tool for fast local discovery.
-
-Quick Start (TL;DR)
-go mod tidy
-go build -o ArchFindTUi.exe
-ArchFindTUI.exe
-
+MIT

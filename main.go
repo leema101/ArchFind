@@ -103,6 +103,7 @@ func main() {
 		}
 	}
 	indexPath := resolveIndexPath(cfg.IndexPath, exeDir)
+	cfgPath := filepath.Join(exeDir, "config.json")
 
 	var idx IndexFile
 	loaded := false
@@ -116,9 +117,23 @@ func main() {
 	engine := &Engine{cfg: cfg}
 	engine.ReplaceIndex(idx)
 
-	// First run: if no index exists, build synchronously before starting the TUI.
-	if !loaded || len(idx.Items) == 0 {
-		fmt.Println("No usable index found. Building initial index, please wait...")
+	// Rebuild synchronously if: no index, index is empty, or config.json is
+	// newer than the index (e.g. new root paths were added).
+	needsSync := !loaded || len(idx.Items) == 0
+	if !needsSync && fileExists(cfgPath) {
+		if cfgInfo, err := os.Stat(cfgPath); err == nil {
+			if cfgInfo.ModTime().Unix() > idx.BuiltAtUnix {
+				needsSync = true
+				fmt.Println("config.json is newer than the index. Rebuilding...")
+			}
+		}
+	}
+	if needsSync {
+		if loaded && len(idx.Items) > 0 {
+			// Already printed reason above; only print generic message otherwise.
+		} else {
+			fmt.Println("No usable index found. Building initial index, please wait...")
+		}
 		newIdx, err := buildIndex(cfg)
 		if err != nil {
 			fmt.Printf("Error building initial index: %v\n", err)
@@ -132,6 +147,7 @@ func main() {
 		idx = newIdx
 		loaded = true
 	}
+	_ = loaded
 
 	rebuild := &RebuildState{}
 
@@ -358,13 +374,19 @@ func main() {
 	refreshResults("", engine.Search(""))
 	updateStatus("")
 
-	// Background rebuild if index is stale
+	// Background rebuild if index is stale (different calendar day) or config
+	// was modified after the index was last built.
 	go func() {
 		engine.mu.RLock()
 		currentBuiltAt := engine.index.BuiltAtUnix
 		engine.mu.RUnlock()
 
 		shouldRebuild := !sameLocalDate(time.Unix(currentBuiltAt, 0), time.Now())
+		if !shouldRebuild {
+			if cfgInfo, err := os.Stat(cfgPath); err == nil {
+				shouldRebuild = cfgInfo.ModTime().Unix() > currentBuiltAt
+			}
+		}
 		if !shouldRebuild {
 			return
 		}
@@ -632,27 +654,50 @@ func loadConfig() (Config, string, error) {
 func buildIndex(cfg Config) (IndexFile, error) {
 	roots := cfg.effectiveRootPaths()
 
+	// Resolve each root to its absolute canonical form so we can detect
+	// overlapping paths (e.g. "G:\Docs" and "G:\Docs\Sub" would double-index
+	// everything under Sub).
+	type canonRoot struct {
+		original string
+		canon    string
+	}
+	var canonRoots []canonRoot
 	var missing []string
 	for _, r := range roots {
-		if !fileExists(r) {
+		abs, err := filepath.Abs(r)
+		if err != nil {
+			abs = r
+		}
+		if !fileExists(abs) {
 			missing = append(missing, r)
+			continue
+		}
+		// Skip if this root is a sub-path of an already-added root.
+		dominated := false
+		for _, cr := range canonRoots {
+			rel, err := filepath.Rel(cr.canon, abs)
+			if err == nil && !strings.HasPrefix(rel, "..") {
+				dominated = true
+				break
+			}
+		}
+		if !dominated {
+			canonRoots = append(canonRoots, canonRoot{original: r, canon: abs})
 		}
 	}
-	if len(missing) == len(roots) {
+	if len(canonRoots) == 0 {
 		return IndexFile{}, fmt.Errorf("none of the configured root paths exist: %s", strings.Join(missing, ", "))
 	}
 
+	seen := make(map[string]struct{}, 32000)
 	items := make([]IndexItem, 0, 32000)
 
-	for _, root := range roots {
-		if !fileExists(root) {
-			continue
-		}
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	for _, cr := range canonRoots {
+		err := filepath.WalkDir(cr.canon, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}
-			if path == root {
+			if path == cr.canon {
 				return nil
 			}
 
@@ -663,6 +708,14 @@ func buildIndex(cfg Config) (IndexFile, error) {
 				}
 				return nil
 			}
+
+			// Guard against symlink loops or overlapping mounts producing the
+			// same canonical path from two different roots.
+			lowerPath := strings.ToLower(path)
+			if _, dup := seen[lowerPath]; dup {
+				return nil
+			}
+			seen[lowerPath] = struct{}{}
 
 			info, err := d.Info()
 			if err != nil {
@@ -685,13 +738,17 @@ func buildIndex(cfg Config) (IndexFile, error) {
 			return nil
 		})
 		if err != nil {
-			return IndexFile{}, fmt.Errorf("error walking %s: %w", root, err)
+			return IndexFile{}, fmt.Errorf("error walking %s: %w", cr.canon, err)
 		}
 	}
 
+	rootNames := make([]string, len(canonRoots))
+	for i, cr := range canonRoots {
+		rootNames[i] = cr.original
+	}
 	return IndexFile{
 		BuiltAtUnix: time.Now().Unix(),
-		RootPath:    strings.Join(roots, "; "),
+		RootPath:    strings.Join(rootNames, "; "),
 		Items:       items,
 	}, nil
 }
