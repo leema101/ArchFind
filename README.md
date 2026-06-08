@@ -96,7 +96,11 @@ This project is pure Go:
 # Config file
 
 {
-  "root_path": "C:\\OneDrive",
+  "root_paths": [
+    "G:\\My Drive\\",
+    "D:\\Projects\\",
+    "C:\\Work\\docs"
+  ],
   "index_path": "archfind-index.json",
   "max_results": 20,
   "exclude_temp_files": true,
