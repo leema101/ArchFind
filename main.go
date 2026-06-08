@@ -19,13 +19,26 @@ import (
 )
 
 type Config struct {
-	RootPath         string `json:"root_path"`
-	IndexPath        string `json:"index_path"`
-	MaxResults       int    `json:"max_results"`
-	ExcludeTempFiles bool   `json:"exclude_temp_files"`
-	FuzzyEnabled     bool   `json:"fuzzy_enabled"`
-	FuzzyMaxDistance int    `json:"fuzzy_max_distance"`
-	SearchDebounceMs int    `json:"search_debounce_ms"`
+	RootPath         string   `json:"root_path"`
+	RootPaths        []string `json:"root_paths"`
+	IndexPath        string   `json:"index_path"`
+	MaxResults       int      `json:"max_results"`
+	ExcludeTempFiles bool     `json:"exclude_temp_files"`
+	FuzzyEnabled     bool     `json:"fuzzy_enabled"`
+	FuzzyMaxDistance int      `json:"fuzzy_max_distance"`
+	SearchDebounceMs int      `json:"search_debounce_ms"`
+}
+
+// effectiveRootPaths returns the unified list of directories to scan.
+// root_paths takes precedence; root_path is the legacy fallback.
+func (c Config) effectiveRootPaths() []string {
+	if len(c.RootPaths) > 0 {
+		return c.RootPaths
+	}
+	if c.RootPath != "" {
+		return []string{c.RootPath}
+	}
+	return nil
 }
 
 type ItemType string
@@ -565,7 +578,7 @@ func loadConfig() (Config, string, error) {
 
 	if !fileExists(cfgPath) {
 		defaultCfg := Config{
-			RootPath:         `C:\OneDrive\OneDrive - Standard Bank\S\architecture`,
+			RootPaths:        []string{`C:\OneDrive\OneDrive - Standard Bank\S\architecture`},
 			IndexPath:        "archfind-index.json",
 			MaxResults:       20,
 			ExcludeTempFiles: true,
@@ -587,8 +600,8 @@ func loadConfig() (Config, string, error) {
 		return Config{}, "", err
 	}
 
-	if strings.TrimSpace(cfg.RootPath) == "" {
-		return Config{}, "", errors.New("root_path is empty in config.json")
+	if len(cfg.effectiveRootPaths()) == 0 {
+		return Config{}, "", errors.New("config.json must specify root_paths (array) or root_path (string)")
 	}
 	if strings.TrimSpace(cfg.IndexPath) == "" {
 		cfg.IndexPath = "archfind-index.json"
@@ -607,57 +620,68 @@ func loadConfig() (Config, string, error) {
 }
 
 func buildIndex(cfg Config) (IndexFile, error) {
-	root := cfg.RootPath
-	if !fileExists(root) {
-		return IndexFile{}, fmt.Errorf("root path does not exist: %s", root)
+	roots := cfg.effectiveRootPaths()
+
+	var missing []string
+	for _, r := range roots {
+		if !fileExists(r) {
+			missing = append(missing, r)
+		}
+	}
+	if len(missing) == len(roots) {
+		return IndexFile{}, fmt.Errorf("none of the configured root paths exist: %s", strings.Join(missing, ", "))
 	}
 
 	items := make([]IndexItem, 0, 32000)
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
+	for _, root := range roots {
+		if !fileExists(root) {
+			continue
 		}
-
-		if path == root {
-			return nil
-		}
-
-		name := d.Name()
-		if shouldExclude(name, cfg) {
-			if d.IsDir() {
-				return filepath.SkipDir
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
 			}
+			if path == root {
+				return nil
+			}
+
+			name := d.Name()
+			if shouldExclude(name, cfg) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+
+			itemType := ItemFile
+			if d.IsDir() {
+				itemType = ItemFolder
+			}
+
+			items = append(items, IndexItem{
+				Name:    name,
+				Path:    path,
+				Parent:  filepath.Dir(path),
+				ModUnix: info.ModTime().Unix(),
+				Type:    itemType,
+			})
+
 			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-
-		itemType := ItemFile
-		if d.IsDir() {
-			itemType = ItemFolder
-		}
-
-		items = append(items, IndexItem{
-			Name:    name,
-			Path:    path,
-			Parent:  filepath.Dir(path),
-			ModUnix: info.ModTime().Unix(),
-			Type:    itemType,
 		})
-
-		return nil
-	})
-	if err != nil {
-		return IndexFile{}, err
+		if err != nil {
+			return IndexFile{}, fmt.Errorf("error walking %s: %w", root, err)
+		}
 	}
 
 	return IndexFile{
 		BuiltAtUnix: time.Now().Unix(),
-		RootPath:    root,
+		RootPath:    strings.Join(roots, "; "),
 		Items:       items,
 	}, nil
 }
