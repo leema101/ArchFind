@@ -27,6 +27,7 @@ type Config struct {
 	FuzzyEnabled     bool     `json:"fuzzy_enabled"`
 	FuzzyMaxDistance int      `json:"fuzzy_max_distance"`
 	SearchDebounceMs int      `json:"search_debounce_ms"`
+	DedupWindowMs    int      `json:"dedup_window_ms"`
 }
 
 // effectiveRootPaths returns the unified list of directories to scan.
@@ -301,7 +302,8 @@ func main() {
 				//      between them) but too fast to be deliberate re-typing.
 				//      75ms < minimum same-key repeat interval for human typists
 				//      (~80ms) but covers VDI input-processing lag.
-				isDup := curLen == lastRuneFieldLen || now.Sub(lastRuneTime) < 75*time.Millisecond
+				dedupWindow := time.Duration(cfg.DedupWindowMs) * time.Millisecond
+			isDup := curLen == lastRuneFieldLen || now.Sub(lastRuneTime) < dedupWindow
 				if isDup {
 					if debugLog != nil {
 						fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate\trune=%q\tfield_len=%d\tdelta=%v\n", time.Now().Format(time.RFC3339Nano), event.Rune(), curLen, now.Sub(lastRuneTime))
@@ -589,6 +591,7 @@ func loadConfig() (Config, string, error) {
 			FuzzyEnabled:     false,
 			FuzzyMaxDistance: 1,
 			SearchDebounceMs: 300,
+			DedupWindowMs:    150,
 		}
 		b, _ := json.MarshalIndent(defaultCfg, "", "  ")
 		_ = os.WriteFile(cfgPath, b, 0644)
@@ -618,6 +621,9 @@ func loadConfig() (Config, string, error) {
 	}
 	if cfg.SearchDebounceMs <= 0 {
 		cfg.SearchDebounceMs = 300
+	}
+	if cfg.DedupWindowMs <= 0 {
+		cfg.DedupWindowMs = 150
 	}
 
 	return cfg, exeDir, nil
