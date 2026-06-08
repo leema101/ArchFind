@@ -226,7 +226,6 @@ func main() {
 	var lastRune rune
 	var lastRuneModifiers tcell.ModMask
 	var lastRuneTime time.Time
-	var lastChangeTime time.Time
 
 	scheduleSearch := func(query string) {
 		debounceMu.Lock()
@@ -257,9 +256,6 @@ func main() {
 			fmt.Fprintf(debugLog, "%s\tchanged\ttext=%q\n", time.Now().Format(time.RFC3339Nano), text)
 			_ = debugLog.Sync()
 		}
-		// Record the time the field text actually changed so we can suppress
-		// duplicate key events that arrive shortly afterwards.
-		lastChangeTime = time.Now()
 		scheduleSearch(text)
 	})
 
@@ -281,19 +277,18 @@ func main() {
 
 		if event.Key() == tcell.KeyRune {
 			now := time.Now()
-			// If we recently saw the same rune and the input field already
-			// recorded that change a short time ago, treat this as a
-			// spurious duplicate and suppress it. Use a conservative
-			// threshold to avoid blocking deliberate double-typing.
+			// Suppress OS-level duplicate key events (a known tcell/Windows
+			// console issue where the same keypress is delivered twice).
+			// True duplicates arrive within a few milliseconds; deliberate
+			// repeated characters (e.g. "ss") are typed 50ms+ apart, so
+			// 25ms is safe.
 			if event.Rune() == lastRune && event.Modifiers() == lastRuneModifiers && !lastRuneTime.IsZero() {
-				// check recent timestamps
-				if now.Sub(lastRuneTime) < 500*time.Millisecond && !lastChangeTime.IsZero() && now.Sub(lastChangeTime) < 500*time.Millisecond {
-					// ensure the field text already ends with this rune
+				if now.Sub(lastRuneTime) < 25*time.Millisecond {
 					cur := search.GetText()
 					runes := []rune(cur)
 					if len(runes) > 0 && runes[len(runes)-1] == event.Rune() {
 						if debugLog != nil {
-							fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate_based_on_change\trune=%q\n", time.Now().Format(time.RFC3339Nano), event.Rune())
+							fmt.Fprintf(debugLog, "%s\tsuppressed_duplicate\trune=%q\tdelta=%v\n", time.Now().Format(time.RFC3339Nano), event.Rune(), now.Sub(lastRuneTime))
 							_ = debugLog.Sync()
 						}
 						return nil
